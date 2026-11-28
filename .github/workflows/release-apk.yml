@@ -31,6 +31,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      # A commit authored where the POSIX executable bit is not tracked (Windows, a web editor, an
+      # archive upload) silently turns `./gradlew` into a 644 file, and every Gradle step then dies
+      # with exit 126. Restore the bit instead of failing the whole release.
+      - name: Make the Gradle wrapper and scripts executable
+        run: chmod +x gradlew scripts/*.py scripts/*.sh 2>/dev/null || chmod +x gradlew
         with:
           fetch-depth: 0
 
