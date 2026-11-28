@@ -76,6 +76,12 @@ class WidgetHeroFitTest {
         val model = hero(language, asset)
         val cell = scale.cellSize.value.toDouble()
         val padding = scale.padding.value.toDouble()
+        val resolvedPriceSize = WidgetHeroMetrics.resolvePriceSize(
+            scale = scale,
+            priceText = model.priceText,
+            cellSize = DpSize(scale.cellSize, scale.cellSize),
+            fontScale = fontScale
+        )
 
         // Row 1: the name/status column (plus the badge when the scale shows one). Row 2: the price.
         val badgeWidth = if (scale.showBadge) {
@@ -89,10 +95,18 @@ class WidgetHeroFitTest {
         val nameBudget = maxCharacters(rowOneWidth, scale.nameSize.value, fontScale)
         val statusBudget = maxCharacters(rowOneWidth, scale.statusSize.value, fontScale)
         // The price owns row 2 on its own; the percent, when present, is the second line of row 1.
-        val priceBudget = maxCharacters(rowTwoWidth, scale.priceSize.value, fontScale)
+        val priceBudget = maxCharacters(rowTwoWidth, resolvedPriceSize.value, fontScale)
         val delta = model.deltaText
         val deltaBudget = maxCharacters(rowOneWidth, scale.statusSize.value, fontScale)
 
+        assertTrue(
+            "resolved price size (${resolvedPriceSize.value}sp) must be strictly greater than delta/status size (${scale.statusSize.value}sp)",
+            resolvedPriceSize.value > scale.statusSize.value
+        )
+        assertTrue(
+            "resolved price size (${resolvedPriceSize.value}sp) must be strictly greater than symbol label size (${scale.nameSize.value}sp)",
+            resolvedPriceSize.value > scale.nameSize.value
+        )
         assertTrue(
             "name \"${model.assetLabel}\" needs ${model.assetLabel.length} chars, budget $nameBudget " +
                 "(${scale.cellSize} @ fontScale $fontScale)",
@@ -116,7 +130,7 @@ class WidgetHeroFitTest {
         // Two rows: name + status stacked, then the price row. Each row is one line of text.
         val lineHeightFactor = 1.25
         val rowOneHeight = (scale.nameSize.value + scale.statusSize.value) * fontScale * lineHeightFactor
-        val rowTwoHeight = scale.priceSize.value * fontScale * lineHeightFactor
+        val rowTwoHeight = resolvedPriceSize.value * fontScale * lineHeightFactor
         val availableHeight = cell - 2 * padding
         assertTrue(
             "the hero needs ${rowOneHeight + rowTwoHeight}dp of height at fontScale $fontScale, " +
@@ -138,6 +152,35 @@ class WidgetHeroFitTest {
     @Test
     fun `the compact Persian hero fits a one by one cell at fontScale 1_3`() {
         assertFits(scale = WidgetHeroMetrics.COMPACT, fontScale = 1.3f, language = AppLanguage.FA)
+    }
+
+    @Test
+    fun `six digit price 298_005 renders prominently larger than delta and fits 1x1 at fontScale 1_0 and 1_3`() {
+        val asset = usd(changePct = 1.2, priceToman = 298_005.0)
+        listOf(AppLanguage.EN, AppLanguage.FA).forEach { language ->
+            val model = hero(language = language, asset = asset)
+            val priceAt10 = WidgetHeroMetrics.resolvePriceSize(
+                scale = WidgetHeroMetrics.COMPACT,
+                priceText = model.priceText,
+                cellSize = DpSize(70.dp, 70.dp),
+                fontScale = 1.0f
+            )
+            val priceAt13 = WidgetHeroMetrics.resolvePriceSize(
+                scale = WidgetHeroMetrics.COMPACT,
+                priceText = model.priceText,
+                cellSize = DpSize(70.dp, 70.dp),
+                fontScale = 1.3f
+            )
+            assertTrue("Expected prominent price size >= 14sp at fontScale 1.0, was $priceAt10", priceAt10.value >= 14f)
+            assertTrue("Price must auto-shrink if needed at fontScale 1.3 without clipping", priceAt13.value <= priceAt10.value)
+            assertTrue("Price must remain strictly larger than delta/status at 1.0", priceAt10.value > WidgetHeroMetrics.COMPACT.statusSize.value)
+            assertTrue("Price must remain strictly larger than delta/status at 1.3", priceAt13.value > WidgetHeroMetrics.COMPACT.statusSize.value)
+
+            assertFits(scale = WidgetHeroMetrics.COMPACT, fontScale = 1.0f, language = language, asset = asset)
+            assertFits(scale = WidgetHeroMetrics.COMPACT, fontScale = 1.3f, language = language, asset = asset)
+            assertFits(scale = WidgetHeroMetrics.REGULAR, fontScale = 1.0f, language = language, asset = asset)
+            assertFits(scale = WidgetHeroMetrics.REGULAR, fontScale = 1.3f, language = language, asset = asset)
+        }
     }
 
     @Test

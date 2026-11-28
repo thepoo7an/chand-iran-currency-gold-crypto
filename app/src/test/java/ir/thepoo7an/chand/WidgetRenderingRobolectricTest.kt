@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
@@ -50,6 +51,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.time.Duration
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = ChandApplication::class)
@@ -74,6 +76,19 @@ class WidgetRenderingRobolectricTest {
         if (view is ViewGroup) {
             for (i in 0 until view.childCount) {
                 result += collectVisibleTexts(view.getChildAt(i))
+            }
+        }
+        return result
+    }
+
+    private fun collectTextViews(view: View): List<TextView> {
+        val result = mutableListOf<TextView>()
+        if (view is TextView && !view.text.isNullOrBlank()) {
+            result += view
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                result += collectTextViews(view.getChildAt(i))
             }
         }
         return result
@@ -277,6 +292,100 @@ class WidgetRenderingRobolectricTest {
         widgets.forEach { (widget, size) ->
             val rv = composeAndInflate(context, widget, size)
             assertTrue(rv.layoutId != 0)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    @OptIn(ExperimentalGlanceRemoteViewsApi::class)
+    @Test
+    fun `hero widget renders 298_005 larger than delta row and fits 1x1 cell at fontScale 1_0 and 1_3 across themes and locales`() = runBlocking {
+        val baseContext = ApplicationProvider.getApplicationContext<Context>()
+        val repo = PreferencesRepository(baseContext)
+        repo.saveCachedSnapshot(sampleSnapshot(usdPrice = 298_005.0))
+
+        val utilsClass = Class.forName("androidx.glance.appwidget.AppWidgetUtilsKt")
+        val runGlanceMethod = utilsClass.getDeclaredMethod(
+            "runGlance",
+            GlanceAppWidget::class.java,
+            Context::class.java,
+            GlanceId::class.java
+        )
+
+        val cellDp = 70.dp
+        val locales = listOf(AppLanguage.EN to Locale.US, AppLanguage.FA to Locale.forLanguageTag("fa"))
+        val fontScales = listOf(1.0f, 1.3f)
+        val nightModes = listOf(Configuration.UI_MODE_NIGHT_NO, Configuration.UI_MODE_NIGHT_YES)
+
+        for ((language, locale) in locales) {
+            repo.setLanguage(language)
+            repo.setUsePersianDigits(language == AppLanguage.FA)
+            val expectedPrice = if (language == AppLanguage.FA) "۲۹۸,۰۰۵" else "298,005"
+
+            for (fontScale in fontScales) {
+                for (nightMode in nightModes) {
+                    val config = Configuration(baseContext.resources.configuration).apply {
+                        this.fontScale = fontScale
+                        this.uiMode = (this.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
+                        setLocale(locale)
+                        setLayoutDirection(locale)
+                    }
+                    val themedContext = baseContext.createConfigurationContext(config)
+                    val flow = runGlanceMethod.invoke(
+                        null,
+                        ChandSingleAssetWidget(),
+                        themedContext,
+                        TestGlanceId
+                    ) as Flow<(@Composable () -> Unit)?>
+                    val content = flow.first()!!
+                    val rv = GlanceRemoteViews().compose(
+                        context = themedContext,
+                        size = DpSize(cellDp, cellDp),
+                        content = content
+                    ).remoteViews
+
+                    val container = FrameLayout(themedContext)
+                    val inflated = rv.apply(themedContext, container)
+                    val cellPx = (cellDp.value * themedContext.resources.displayMetrics.density).toInt()
+                    inflated.measure(
+                        View.MeasureSpec.makeMeasureSpec(cellPx, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(cellPx, View.MeasureSpec.EXACTLY)
+                    )
+                    inflated.layout(0, 0, cellPx, cellPx)
+
+                    val textViews = collectTextViews(inflated)
+                    val allTexts = textViews.map { it.text.toString() }
+                    val priceTv = textViews.firstOrNull { it.text.toString() == expectedPrice }
+                    val deltaTv = textViews.firstOrNull { it.text.toString().contains("%") }
+                    val labelTv = textViews.firstOrNull { it.text.toString() == "USD" }
+
+                    assertNotNull("Expected price TextView '$expectedPrice', got $allTexts", priceTv)
+                    assertNotNull("Expected delta TextView, got $allTexts", deltaTv)
+                    assertNotNull("Expected USD label TextView, got $allTexts", labelTv)
+
+                    assertTrue(
+                        "Price textSize (${priceTv!!.textSize}) must be strictly greater than delta textSize (${deltaTv!!.textSize}) [lang=$language, fontScale=$fontScale, night=$nightMode]",
+                        priceTv.textSize > deltaTv.textSize
+                    )
+                    assertTrue(
+                        "Price textSize (${priceTv.textSize}) must be strictly greater than label textSize (${labelTv!!.textSize})",
+                        priceTv.textSize > labelTv.textSize
+                    )
+                    assertTrue("Price TextView must keep maxLines=1", priceTv.maxLines == 1)
+                    assertTrue(
+                        "Price TextView width (${priceTv.measuredWidth}px) must fit 1x1 cell ($cellPx px)",
+                        priceTv.measuredWidth <= cellPx && priceTv.right <= cellPx
+                    )
+                    assertTrue(
+                        "Price TextView bottom (${priceTv.bottom}px) must fit 1x1 cell ($cellPx px)",
+                        priceTv.bottom <= cellPx
+                    )
+                    val ellipsisCount = priceTv.layout?.getEllipsisCount(0) ?: 0
+                    assertTrue("Price TextView must not truncate or ellipsize (ellipsis=$ellipsisCount)", ellipsisCount == 0)
+
+                    assertFalse("Must not reintroduce DELAYED badge", allTexts.any { it.contains("DELAYED", ignoreCase = true) })
+                    assertFalse("Must not reintroduce timestamp row", allTexts.any { it.contains(":") })
+                }
+            }
         }
     }
 
