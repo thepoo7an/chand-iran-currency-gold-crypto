@@ -37,6 +37,7 @@ import ir.thepoo7an.chand.widget.ChandPackageReplacedReceiver
 import ir.thepoo7an.chand.widget.ChandSingleAssetWidget
 import ir.thepoo7an.chand.widget.ChandSingleWidgetReceiver
 import ir.thepoo7an.chand.widget.ChandWideListWidget
+import ir.thepoo7an.chand.widget.WidgetHeroMetrics
 import ir.thepoo7an.chand.widget.WidgetSyncCoordinator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -371,16 +372,41 @@ class WidgetRenderingRobolectricTest {
                         priceTv.textSize > labelTv.textSize
                     )
                     assertTrue("Price TextView must keep maxLines=1", priceTv.maxLines == 1)
-                    assertTrue(
-                        "Price TextView width (${priceTv.measuredWidth}px) must fit 1x1 cell ($cellPx px)",
-                        priceTv.measuredWidth <= cellPx && priceTv.right <= cellPx
-                    )
-                    assertTrue(
-                        "Price TextView bottom (${priceTv.bottom}px) must fit 1x1 cell ($cellPx px)",
-                        priceTv.bottom <= cellPx
-                    )
                     val ellipsisCount = priceTv.layout?.getEllipsisCount(0) ?: 0
                     assertTrue("Price TextView must not truncate or ellipsize (ellipsis=$ellipsisCount)", ellipsisCount == 0)
+
+                    // Robolectric stubs text layout: every line reports roughly the same height whatever
+                    // the font size, so an inflated view's `bottom`/`right` measures the stub and not the
+                    // widget (it reported ~99px for a hero that needs ~50dp). Assert the geometry that is
+                    // decidable here — the price size the widget budgets for this cell, and that this size
+                    // fits by the same em-advance rule the widget uses — and leave pixel-exact fit to
+                    // WidgetHeroFitTest, which is driven by the production metrics.
+                    val compact = WidgetHeroMetrics.COMPACT
+                    val budgetedPriceSize = WidgetHeroMetrics.resolvePriceSize(
+                        scale = compact,
+                        priceText = expectedPrice,
+                        cellSize = DpSize(cellDp, cellDp),
+                        fontScale = fontScale
+                    )
+                    assertTrue(
+                        "the budgeted price size for the 1x1 cell (${budgetedPriceSize.value}sp) must stay " +
+                            "larger than the delta row [lang=$language, fontScale=$fontScale, night=$nightMode]",
+                        budgetedPriceSize.value > compact.statusSize.value
+                    )
+
+                    val availableWidth = cellDp.value - 2 * compact.padding.value
+                    val priceWidth = expectedPrice.length * 0.55f * budgetedPriceSize.value * fontScale
+                    assertTrue(
+                        "price \"$expectedPrice\" needs ${priceWidth}dp of the ${availableWidth}dp row " +
+                            "at ${budgetedPriceSize.value}sp, fontScale $fontScale",
+                        priceWidth <= availableWidth
+                    )
+                    val heroHeight = (compact.nameSize.value + compact.statusSize.value +
+                        budgetedPriceSize.value) * fontScale * 1.25f + 2 * compact.padding.value
+                    assertTrue(
+                        "the hero needs ${heroHeight}dp of the ${cellDp.value}dp cell, fontScale $fontScale",
+                        heroHeight <= cellDp.value
+                    )
 
                     assertFalse("Must not reintroduce DELAYED badge", allTexts.any { it.contains("DELAYED", ignoreCase = true) })
                     assertFalse("Must not reintroduce timestamp row", allTexts.any { it.contains(":") })
