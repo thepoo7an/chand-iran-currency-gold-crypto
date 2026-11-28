@@ -17,6 +17,7 @@ import androidx.datastore.core.DataStore
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.ImageProvider
+import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionStartActivity
@@ -67,6 +68,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.io.File
+import kotlin.math.floor
 
 /**
  * Type scale and paddings of the single-asset hero widget.
@@ -92,17 +94,20 @@ internal object WidgetHeroMetrics {
         val priceDeltaGap: Dp
     )
 
+    private const val ESTIMATED_CHAR_EM = 0.55f
+    private const val LINE_HEIGHT_FACTOR = 1.25f
+
     /** A 1x1 cell: two rows, symbol-only, no badge, nothing repeated. */
     val COMPACT = HeroScale(
         cellSize = 70.dp,
-        padding = 8.dp,
+        padding = 6.dp,
         showBadge = false,
         badgeSize = 18.dp,
         badgeGlyphSize = 9.sp,
         badgeTextGap = 4.dp,
         nameSize = 8.sp,
         statusSize = 7.sp,
-        priceSize = 10.sp,
+        priceSize = 15.sp,
         deltaSize = 8.sp,
         priceDeltaGap = 3.dp
     )
@@ -117,7 +122,7 @@ internal object WidgetHeroMetrics {
         badgeTextGap = 5.dp,
         nameSize = 10.sp,
         statusSize = 8.sp,
-        priceSize = 16.sp,
+        priceSize = 22.sp,
         deltaSize = 10.sp,
         priceDeltaGap = 4.dp
     )
@@ -125,6 +130,50 @@ internal object WidgetHeroMetrics {
     /** Below ~80dp the launcher has given us a single cell, so the compact scale is the safe one. */
     fun forSize(size: DpSize): HeroScale =
         if (size.width <= 80.dp || size.height <= 80.dp) COMPACT else REGULAR
+
+    /**
+     * Resolves the hero price font size for the actual launcher [cellSize], active [fontScale], and
+     * [priceText] length. Starts from the bold pre-compaction hero scale and auto-shrinks gently in
+     * 0.5sp steps only when horizontal or vertical bounds require it so `maxLines = 1` never clips
+     * at `fontScale` up to 1.3.
+     */
+    fun resolvePriceSize(
+        scale: HeroScale,
+        priceText: String,
+        cellSize: DpSize = DpSize(scale.cellSize, scale.cellSize),
+        fontScale: Float = 1.0f
+    ): TextUnit {
+        val safeFontScale = fontScale.coerceAtLeast(1.0f)
+        val cellWidth = if (cellSize.width.value.isFinite() && cellSize.width > 0.dp) {
+            cellSize.width.value
+        } else {
+            scale.cellSize.value
+        }
+        val cellHeight = if (cellSize.height.value.isFinite() && cellSize.height > 0.dp) {
+            cellSize.height.value
+        } else {
+            scale.cellSize.value
+        }
+
+        val availableWidth = (cellWidth - 2f * scale.padding.value).coerceAtLeast(24f)
+        val rowOneHeight = (scale.nameSize.value + scale.statusSize.value) * safeFontScale * LINE_HEIGHT_FACTOR
+        val availableHeight = (cellHeight - 2f * scale.padding.value - rowOneHeight - scale.priceDeltaGap.value)
+            .coerceAtLeast(12f)
+
+        val charCount = priceText.length.coerceAtLeast(1)
+        val maxHorizontalSp = availableWidth / (charCount * ESTIMATED_CHAR_EM * safeFontScale)
+        val maxVerticalSp = availableHeight / (safeFontScale * LINE_HEIGHT_FACTOR)
+        val ceilingSp = minOf(maxHorizontalSp, maxVerticalSp)
+
+        val preferredSp = if (scale == REGULAR && cellWidth >= 140f && cellHeight >= 140f) {
+            24f
+        } else {
+            scale.priceSize.value
+        }
+
+        val steppedSp = floor(minOf(preferredSp, ceilingSp) * 2f) / 2f
+        return steppedSp.coerceAtLeast(6f).sp
+    }
 }
 
 private object WidgetColors {
@@ -429,11 +478,14 @@ private fun SingleHeroWidgetContent(
     updatedAtMillis: Long,
     prefs: AppPreferences
 ) {
+    val context = LocalContext.current
+    val cellSize = LocalSize.current
+    val fontScale = context.resources.configuration.fontScale.coerceAtLeast(1.0f)
     val isFa = prefs.language == AppLanguage.FA
     val badgeBg = if (prefs.widgetTranslucent) WidgetColors.glassBadgeBg else WidgetColors.solidBadgeBg
     // The launcher decides how big the cell is (~70dp for 1x1, 110dp for the default 2x2); the type
     // scale follows it instead of overshooting the smaller one.
-    val scale = WidgetHeroMetrics.forSize(LocalSize.current)
+    val scale = WidgetHeroMetrics.forSize(cellSize)
 
     Box(
         modifier = GlanceModifier
@@ -478,6 +530,12 @@ private fun SingleHeroWidgetContent(
                 prefs = prefs,
                 snapshotFreshness = snapshotFreshness,
                 updatedAtMillis = updatedAtMillis
+            )
+            val resolvedPriceSize = WidgetHeroMetrics.resolvePriceSize(
+                scale = scale,
+                priceText = hero.priceText,
+                cellSize = cellSize,
+                fontScale = fontScale
             )
             val trendDirection = resolvePriceTrend(
                 changeAmount = if (asset.isUsdPerBarrel) asset.change24hUsd else asset.change24hToman,
@@ -542,7 +600,7 @@ private fun SingleHeroWidgetContent(
                     text = hero.priceText,
                     style = TextStyle(
                         color = WidgetColors.title,
-                        fontSize = scale.priceSize,
+                        fontSize = resolvedPriceSize,
                         fontWeight = FontWeight.Bold
                     ),
                     maxLines = 1
