@@ -26,6 +26,14 @@ jobs:
       - name: Make the Gradle wrapper and scripts executable
         run: chmod +x gradlew scripts/*.py scripts/*.sh 2>/dev/null || chmod +x gradlew
 
+      # A workflow file that GitHub cannot parse only fails *after* it lands on main (the run shows the
+      # file path and zero jobs), which is how a stray `with:` once stopped every release build.
+      - name: Validate workflow YAML
+        run: |
+          python3 -c "import yaml" 2>/dev/null ||
+            python3 -m pip install --quiet --break-system-packages pyyaml
+          python3 scripts/validate-workflows.py
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
